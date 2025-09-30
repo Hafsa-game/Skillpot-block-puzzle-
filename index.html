@@ -1,139 +1,202 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>SkillPot Block Puzzle</title>
-  <style>
-    body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 20px; background:#111; color:#fff; text-align:center; }
-    h2 { margin: 0 0 6px 0; }
-    #hud { display:flex; gap:20px; justify-content:center; margin:10px 0 16px; }
-    #grid { display:grid; grid-template-columns: repeat(3, 100px); grid-gap: 8px; justify-content:center; margin: 0 auto 16px; }
-    .tile { width:100px; height:100px; display:flex; align-items:center; justify-content:center;
-            font-size:28px; border-radius:12px; user-select:none; background:#e11; }
-    .blank { background:#333; color:#333; }
-    #status { min-height: 28px; opacity:.9; }
-    button { background:#e11; color:#fff; padding:10px 16px; border:none; border-radius:10px; font-size:16px; }
-    button:hover { opacity:.9; cursor:pointer; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Block Puzzle (SkillPot)</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;text-align:center;background:#111;color:#fff;margin:0;padding:20px}
+  h1{color:#E50914;margin-bottom:6px}
+  #info{margin-bottom:10px}
+  #grid{display:grid;grid-template-columns:repeat(3,100px);grid-gap:6px;justify-content:center;margin:0 auto 12px}
+  .tile{width:100px;height:100px;background:#E50914;display:flex;align-items:center;justify-content:center;font-size:28px;border-radius:8px;cursor:pointer}
+  .blank{background:#444;cursor:default}
+  #controls{margin-top:6px}
+  #status{margin-top:12px}
+  button{padding:8px 12px;border-radius:6px;border:none;background:#E50914;color:#fff;font-weight:700}
+</style>
 </head>
 <body>
-  <h2>SkillPot — Block Puzzle</h2>
-  <div id="hud">
-    <div id="time">Time: 60s</div>
-    <div id="moves">Moves: 0</div>
+  <h1>Block Puzzle</h1>
+  <div id="info">
+    <span id="timer">Time: 0s</span> · <span id="moves">Moves: 0</span>
   </div>
   <div id="grid"></div>
+  <div id="controls">
+    <button id="reshuffle">Reshuffle</button>
+    <button id="giveup">Give Up</button>
+  </div>
   <div id="status"></div>
-  <button id="reshuffleBtn">Reshuffle</button>
 
-  <script>
-    // --- Config
-    const LIMIT_SECONDS = 60;  // game length
-    const SIZE = 3;            // 3x3 grid
-    const BLANK = 9;           // index value for blank tile
+<script>
+/* --------- helpers to read URL params passed from Thunkable --------- */
+function getQueryVar(key){
+  const q = location.search.substring(1).split("&");
+  for(let i=0;i<q.length;i++){
+    const p = q[i].split("=");
+    if(decodeURIComponent(p[0])===key) return decodeURIComponent(p[1]||"");
+  }
+  return "";
+}
 
-    // --- State
-    let tiles = [1,2,3,4,5,6,7,8,BLANK];
-    let blankIndex = 8; // starts at 9th position (index 8)
-    let moves = 0;
-    let elapsed = 0;
-    let running = false;
-    let timerId = null;
+/* inputs from Thunkable */
+const matchId = getQueryVar("match_id") || "MISSING_MATCH";
+const playerEmail = getQueryVar("email") || "unknown@example.com";
 
-    const gridEl = document.getElementById('grid');
-    const timeEl = document.getElementById('time');
-    const movesEl = document.getElementById('moves');
-    const statusEl = document.getElementById('status');
-    const reshuffleBtn = document.getElementById('reshuffleBtn');
+/* game state */
+let tiles = [1,2,3,4,5,6,7,8,""]; // 9th is blank
+let blankIndex = 8; // index in array (0-based) of blank
+let moves = 0;
+let elapsed = 0;
+let running = false;
+let intervalId = null;
+const TIME_LIMIT = 120; // seconds (2 minutes)
 
-    function neighborsOf(index){
-      // 1..9 layout indices -> neighbors map
-      const neigh = {
-        1:[2,4], 2:[1,3,5], 3:[2,6],
-        4:[1,5,7], 5:[2,4,6,8], 6:[3,5,9],
-        7:[4,8], 8:[5,7,9], 9:[6,8]
-      };
-      return neigh[index+1].map(n=>n-1); // convert to 0-based
-    }
+/* DOM */
+const grid = document.getElementById("grid");
+const timerLabel = document.getElementById("timer");
+const movesLabel = document.getElementById("moves");
+const status = document.getElementById("status");
+const reshuffleBtn = document.getElementById("reshuffle");
+const giveupBtn = document.getElementById("giveup");
 
-    function render(){
-      gridEl.innerHTML = '';
-      tiles.forEach((v,i)=>{
-        const d = document.createElement('div');
-        d.className = 'tile' + (v===BLANK?' blank':'');
-        d.textContent = (v===BLANK)? '' : String(v);
-        d.onclick = () => tap(i);
-        gridEl.appendChild(d);
-      });
-      timeEl.textContent = `Time: ${Math.max(0, LIMIT_SECONDS - elapsed)}s`;
-      movesEl.textContent = `Moves: ${moves}`;
-    }
+/* render function */
+function render(){
+  grid.innerHTML = "";
+  tiles.forEach((t,i)=>{
+    const d = document.createElement("div");
+    d.className = "tile";
+    if(t === "") { d.classList.add("blank"); d.innerText = ""; }
+    else d.innerText = t;
+    d.addEventListener("click", ()=>tileClick(i));
+    grid.appendChild(d);
+  });
+}
 
-    function shuffleSolvable(){
-      // Start from solved, do legal random moves to keep solvable
-      tiles = [1,2,3,4,5,6,7,8,BLANK];
-      blankIndex = 8;
-      for (let k=0;k<150;k++){
-        const neigh = neighborsOf(blankIndex);
-        const choice = neigh[Math.floor(Math.random()*neigh.length)];
-        [tiles[blankIndex], tiles[choice]] = [tiles[choice], tiles[blankIndex]];
-        blankIndex = choice;
-      }
-      moves = 0; elapsed = 0; running = false; stopTimer();
-      statusEl.textContent = '';
-      render();
-    }
+/* neighbors for index (0-based 3x3) */
+function neighbors(index){
+  const nbr = [];
+  const row = Math.floor(index/3);
+  const col = index%3;
+  if(col>0) nbr.push(index-1);
+  if(col<2) nbr.push(index+1);
+  if(row>0) nbr.push(index-3);
+  if(row<2) nbr.push(index+3);
+  return nbr;
+}
 
-    function tap(i){
-      if (!running) { startTimer(); running = true; }
-      const neigh = neighborsOf(blankIndex);
-      if (neigh.includes(i)){
-        [tiles[blankIndex], tiles[i]] = [tiles[i], tiles[blankIndex]];
-        blankIndex = i;
-        moves++;
-        render();
-        checkSolved();
-      }
-    }
+/* swap helper */
+function swap(i,j){
+  const tmp = tiles[i];
+  tiles[i] = tiles[j];
+  tiles[j] = tmp;
+}
 
-    function checkSolved(){
-      const solved = tiles.join(',') === [1,2,3,4,5,6,7,8,BLANK].join(',');
-      if (solved){
-        finish(true);
-      }
-    }
+/* shuffle by doing legal moves from solved state => guarantees solvable */
+function shuffle(times=200){
+  tiles = [1,2,3,4,5,6,7,8,""];
+  blankIndex = 8;
+  for(let k=0;k<times;k++){
+    const nbr = neighbors(blankIndex);
+    const choice = nbr[Math.floor(Math.random()*nbr.length)];
+    swap(blankIndex, choice);
+    blankIndex = choice;
+  }
+  moves = 0;
+  elapsed = 0;
+  running = false;
+  stopTimer();
+  updateHUD();
+  render();
+  status.innerText = "Good luck!";
+}
 
-    function startTimer(){
+/* start & stop timer */
+function startTimer(){
+  if(running) return;
+  running = true;
+  intervalId = setInterval(()=>{
+    elapsed++;
+    updateHUD();
+    if(elapsed >= TIME_LIMIT){
+      // time's up
       stopTimer();
-      timerId = setInterval(()=>{
-        elapsed++;
-        render();
-        if (elapsed >= LIMIT_SECONDS){
-          finish(false);
-        }
-      }, 1000);
+      finalize(false); // false = not solved
     }
+  }, 1000);
+}
+function stopTimer(){
+  running = false;
+  if(intervalId){ clearInterval(intervalId); intervalId = null; }
+}
 
-    function stopTimer(){
-      if (timerId) { clearInterval(timerId); timerId = null; }
-    }
+/* update HUD */
+function updateHUD(){
+  timerLabel.innerText = "Time: " + elapsed + "s";
+  movesLabel.innerText = "Moves: " + moves;
+}
 
-    function finish(solved){
+/* when a tile is clicked */
+function tileClick(i){
+  const blank = tiles.indexOf("");
+  const possible = neighbors(i);
+  if(possible.includes(blank)){
+    // legal move
+    swap(i, blank);
+    blankIndex = i; // new blank position
+    moves++;
+    if(!running) startTimer(); // start on first legal move
+    updateHUD();
+    render();
+    if(isSolved()){
       stopTimer();
-      running = false;
-      const secondsPlayed = Math.min(elapsed, LIMIT_SECONDS);
-      statusEl.textContent = solved ? 'Solved! 🎉' : 'Time up ⏱️';
-      // Send result back to Thunkable WebViewer:
-      // "RESULT|<moves>|<seconds>|<SOLVED>"
-      const msg = `RESULT|${moves}|${secondsPlayed}|${solved ? 'TRUE' : 'FALSE'}`;
-      try { window.parent.postMessage(msg, '*'); } catch(e){}
+      finalize(true);
     }
+  }
+}
 
-    reshuffleBtn.addEventListener('click', shuffleSolvable);
+/* check solved */
+function isSolved(){
+  for(let i=0;i<8;i++){
+    if(tiles[i] !== i+1) return false;
+  }
+  // tiles[8] should be blank
+  return tiles[8] === "";
+}
 
-    // init
-    shuffleSolvable();
-  </script>
+/* finalize & send result to Thunkable parent */
+function finalize(solved){
+  stopTimer();
+  const result = {
+    type: "PUZZLE_DONE",
+    match_id: matchId,
+    email: playerEmail,
+    solved: solved ? 1 : 0,
+    time_seconds: solved ? elapsed : elapsed, // if not solved we still post time
+    moves: moves,
+    timestamp: new Date().toISOString()
+  };
+  status.innerText = solved ? "Solved! Sending result..." : "Time up or given up. Sending result...";
+  // send JSON string to parent (Thunkable WebViewer will receive this)
+  try{
+    window.parent.postMessage(JSON.stringify(result), "*");
+  }catch(e){
+    // fallback: show the JSON so user can screenshot
+    status.innerText = "Result: " + JSON.stringify(result);
+  }
+}
+
+/* buttons */
+reshuffleBtn.addEventListener("click", ()=>shuffle(200));
+giveupBtn.addEventListener("click", ()=>{
+  finalize(false);
+});
+
+/* init */
+shuffle(200);
+render();
+updateHUD();
+</script>
 </body>
 </html>
+
